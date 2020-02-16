@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <title>Oracle JET Examples</title>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1">
+    <link rel="icon" href="css/images/favicon.ico" type="image/x-icon" />
+
+    <!-- This is the main css file for the default Alta theme -->
+<!-- injector:theme -->
+<link rel="stylesheet" href="css/alta/8.0.0/web/alta.css" id="css" />
+<!-- endinjector -->
+
+    <!-- This is where you would add any app specific styling -->
+    <link rel="stylesheet" href="css/app.css" type="text/css"/>
+  </head>
+  <body>
+    <div id="app">
+      <div id="header">
+        <h1><oj-bind-text value="[[pageTitle]]"></oj-bind-text></h1>
+      </div>
+      <div id="page-body">
+        <div id="nav">
+          <oj-list-view id="nav-menu-list"
+                        data="[[navLinksDP]]"
+                        selected="[[selectedNavLink]]"
+                        selection-mode="single"
+                        selection-required="true"
+                        on-selected-changed="[[onNavLinkChanged]]">
+            <template slot="itemTemplate">
+              <li><a class="oj-link" href="#"><oj-bind-text value="[[$current.data.label]]"></oj-bind-text></a></li>
+            </template>
+          </oj-list-view>
+        </div>
+        <div id="content">
+          <oj-module id="content-module" config="[[moduleConfig]]"></oj-module>
+        </div>
+      </div>
+    </div>
+
+    <script type="text/javascript" src="js/libs/require/require.js"></script>
+    <script type="text/javascript" src="js/main.js"></script>
+    <script type="text/javascript" src="js/app.js"></script>
+  </body>
+</html>
