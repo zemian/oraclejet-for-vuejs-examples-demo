@@ -1,49 +1,28 @@
 /**
- * @license
- * Copyright (c) 2014, 2019, Oracle and/or its affiliates.
- * The Universal Permissive License (UPL), Version 1.0
- */
+  Copyright (c) 2015, 2020, Oracle and/or its affiliates.
+  The Universal Permissive License (UPL), Version 1.0
+*/
+// This needs to be non-ES6
+/* eslint-disable no-var, import/no-dynamic-require, global-require, prefer-arrow-callback */
+
 'use strict';
-/**
- * RequireJS config for OJET
- */
+
 (function () {
-    function _ojIsIE11() {
-        var nAgt = navigator.userAgent;
-        return nAgt.indexOf('MSIE') !== -1 || !!nAgt.match(/Trident.*rv:11./);
-    };
-    var _ojNeedsES5 = _ojIsIE11();
-    requirejs.config({
-        baseUrl: 'js',
+  var _ojNeedsES5;
+  var bundle = 'bundle';
 
-        // Path mappings for the logical module names
-        // Update the main-release-paths.json for release mode when updating the mappings
-        paths:
-// injector:mainReleasePaths
+  function _ojIsIE11() {
+    var nAgt = navigator.userAgent; // eslint-disable-line no-undef
+    return nAgt.indexOf('MSIE') !== -1 || !!nAgt.match(/Trident.*rv:11./);
+  }
+  _ojNeedsES5 = _ojIsIE11();
 
-{
-  "knockout":"libs/knockout/knockout-3.5.0.debug",
-  "jquery":"libs/jquery/jquery-3.4.1",
-  "jqueryui-amd":"libs/jquery/jqueryui-amd-1.12.1",
-  "promise":"libs/es6-promise/es6-promise",
-  "hammerjs":"libs/hammer/hammer-2.0.8",
-  "ojdnd":"libs/dnd-polyfill/dnd-polyfill-1.0.1",
-  "ojs":"libs/oj/v8.0.0/debug" + (_ojNeedsES5 ? "_es5" : ""),
-  "ojL10n":"libs/oj/v8.0.0/ojL10n",
-  "ojtranslations":"libs/oj/v8.0.0/resources",
-  "persist":"libs/persist/debug",
-  "text":"libs/require/text",
-  "signals":"libs/js-signals/signals",
-  "touchr":"libs/touchr/touchr",
-  "regenerator-runtime":"libs/regenerator-runtime/runtime",
-  "corejs":"libs/corejs/shim",
-  "customElements":"libs/webcomponents/custom-elements.min",
-  "proj4":"libs/proj4js/dist/proj4-src",
-  "css":"libs/require-css/css",
-  "css-builder":"libs/require-css/css-builder",
-  "normalize":"libs/require-css/normalize"
-}
+  // eslint-disable-next-line no-undef
+  requirejs.config({
+    baseUrl: 'js'
+  });
 
-// endinjector
-    });
+  bundle += (_ojNeedsES5 ? '_es5' : '');
+  require([bundle], function () {
+  });
 }());
