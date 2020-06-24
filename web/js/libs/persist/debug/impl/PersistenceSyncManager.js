@@ -27,7 +27,7 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
       logger.log("Offline Persistence Toolkit PersistenceSyncManager: addEventListener() for type: " + type + " and scope: " + scope);
       this._eventListeners.push({type: type.toLowerCase(), listener: listener, scope: scope});
     };
-    
+
     PersistenceSyncManager.prototype.removeEventListener = function (type, listener, scope) {
       logger.log("Offline Persistence Toolkit PersistenceSyncManager: removeEventListener() for type: " + type + " and scope: " + scope);
       this._eventListeners = this._eventListeners.filter(function (eventListener) {
@@ -104,23 +104,41 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
       var localVars = {};
       return _getSyncLogStorage().then(function (store) {
         localVars.store = store;
-        return _getRequestFromSyncLog(self, requestId);
-      }).then(function (request) {
-        localVars.request = request;
-        return localVars.store.removeByKey(requestId);
-      }).then(function () {
-        // Also remove the redo/undo data
-        return _getRedoUndoStorage();
-      }).then(function (redoUndoStore) {
-        return redoUndoStore.removeByKey(requestId);
-      }).then(function () {
-        return localVars.request;
+        return _getRequestFromSyncLog(requestId, store);
+      }).then(function(request) {
+        if (!request) {
+          return;
+        } else {
+          return self._internalRemoveRequest(requestId, request, localVars.store);
+        }
       });
+    }
+
+    PersistenceSyncManager.prototype._internalRemoveRequest = function (requestId, request, synclogStore) {
+      var self = this;
+      var promises = [];
+      if (!synclogStore) {
+        promises.push(_getSyncLogStorage().then(function(synclogStore) {
+          return synclogStore.removeByKey(requestId);
+        }));
+      } else {
+        promises.push(synclogStore.removeByKey(requestId));
+      }
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        promises.push(_getRedoUndoStorage().then(function(redoUndoStore) {
+          return redoUndoStore.removeByKey(requestId);
+        }));
+      }
+      return Promise.all(promises).then(function() {
+        return request;
+      }).catch(function(error) {
+        logger.log("Offline Persistence Toolkit PersistenceSyncManager: removeRequest() error for Request with requestId: " + requestId);
+      });;
     };
-    
+
     PersistenceSyncManager.prototype.updateRequest = function (requestId, request) {
       logger.log("Offline Persistence Toolkit PersistenceSyncManager: updateRequest() for Request with requestId: " + requestId);
-      return Promise.all([_getSyncLogStorage(), 
+      return Promise.all([_getSyncLogStorage(),
         persistenceUtils.requestToJSON(request)]
         ).then(function (values) {
         var store = values[0];
@@ -140,124 +158,111 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
       this._syncing = true;
       var syncPromise = new Promise(function (resolve, reject) {
         self.getSyncLog().then(function (value) {
-          if (self._isOnline()) {
-            logger.log("Offline Persistence Toolkit PersistenceSyncManager: Processing sync, is online");
-            var requestId, request, requestClone, statusCode;
-
-            var replayRequestArray = function (requests) {
-              if (requests.length == 0) {
-                logger.log("Offline Persistence Toolkit PersistenceSyncManager: Sync finished, no requests in sync log");
-                resolve();
-              }
-              if (requests.length > 0) {
-                logger.log("Offline Persistence Toolkit PersistenceSyncManager: Processing sync, # of request in sync log: " + requests.length);
-                requestId = requests[0].requestId;
-                request = requests[0].request;
-                // we need to clone the request before sending it off so we
-                // can return it later in case of error
-                requestClone = request.clone();
-                logger.log("Offline Persistence Toolkit PersistenceSyncManager: Dispatching beforeSyncRequest event");
-                _dispatchEvent(self, 'beforeSyncRequest', {'requestId': requestId,
-                  'request': requestClone.clone()},
-                  request.url).then(function (eventResult) {
-                  if (_checkStopSync(eventResult)) {
-                    logger.log("Offline Persistence Toolkit PersistenceSyncManager: Sync stopped by beforeSyncRequest event listener");
-                    resolve();
-                    return;
+          logger.log("Offline Persistence Toolkit PersistenceSyncManager: Processing sync");
+          var requestId, request, requestClone, statusCode;
+          var replayRequestArray = function (requests) {
+            if (requests.length == 0) {
+              logger.log("Offline Persistence Toolkit PersistenceSyncManager: Sync finished, no requests in sync log");
+              resolve();
+            }
+            if (requests.length > 0) {
+              logger.log("Offline Persistence Toolkit PersistenceSyncManager: Processing sync, # of requests in sync log: " + requests.length);
+              requestId = requests[0].requestId;
+              request = requests[0].request;
+              // we need to clone the request before sending it off so we
+              // can return it later in case of error
+              requestClone = request.clone();
+              logger.log("Offline Persistence Toolkit PersistenceSyncManager: Dispatching beforeSyncRequest event");
+              _dispatchEvent(self, 'beforeSyncRequest', {'requestId': requestId,
+                'request': requestClone.clone()},
+                request.url).then(function (eventResult) {
+                if (_checkStopSync(eventResult)) {
+                  logger.log("Offline Persistence Toolkit PersistenceSyncManager: Sync stopped by beforeSyncRequest event listener");
+                  resolve();
+                  return;
+                }
+                eventResult = eventResult || {};
+                if (eventResult.action !== 'skip') {
+                  if (eventResult.action === 'replay') {
+                    logger.log("Offline Persistence Toolkit PersistenceSyncManager: Replay request from beforeSyncRequest event listener");
+                    // replay the provided request instead of what's in the sync log
+                    request = eventResult.request;
                   }
-                  eventResult = eventResult || {};
-                  if (eventResult.action !== 'skip') {
-                    if (eventResult.action === 'replay') {
-                      logger.log("Offline Persistence Toolkit PersistenceSyncManager: Replay request from beforeSyncRequest event listener");
-                      // replay the provided request instead of what's in the sync log
-                      request = eventResult.request;
-                    }                  
-                    requestClone = request.clone();
-                    _checkURL(self, request).then(function() {
-                      logger.log("Offline Persistence Toolkit PersistenceSyncManager: Replaying request with url: " + request.url);
-                      self._browserFetch(request).then(function (response) {
-                        statusCode = response.status;
+                  requestClone = request.clone();
+                  _checkURL(self, request).then(function() {
+                    // mark the request as initiated from sync operation and
+                    // start the fetch to replay the request. we don't directly
+                    // use browser fetch because we want the response from the
+                    // fetch to go through cacheStrategy logic from response
+                    // proxy.
+                    persistenceUtils.markReplayRequest(request, true);
+                    logger.log("Offline Persistence Toolkit PersistenceSyncManager: Replaying request with url: " + request.url);
+                    fetch(request).then(function (response) {
+                      statusCode = response.status;
 
-                        // fail for HTTP error codes 4xx and 5xx
-                        if (statusCode >= 400) {
-                          reject({'error': response.statusText,
-                            'requestId': requestId,
-                            'request': requestClone.clone(),
-                            'response': response.clone()});
-                          return;
-                        }
-                        persistenceUtils._cloneResponse(response, {url: request.url}).then(function(responseClone) {
-                          logger.log("Offline Persistence Toolkit PersistenceSyncManager: Dispatching syncRequest event");
-                          _dispatchEvent(self, 'syncRequest', {'requestId': requestId,
-                            'request': requestClone.clone(),
-                            'response': responseClone.clone()},
-                            request.url).then(function (dispatchEventResult) {
-                            if (!_checkStopSync(dispatchEventResult)) {
-                              logger.log("Offline Persistence Toolkit PersistenceSyncManager: Removing replayed request");
-                              self.removeRequest(requestId).then(function () {
-                                requests.shift();
-                                if (request.method == 'GET' ||
-                                  request.method == 'HEAD') {
-                                  persistenceUtils._cloneResponse(responseClone, {url: request.url}).then(function(responseClone) {
-                                    self._cache().put(request, responseClone).then(function () {
-                                      logger.log("Offline Persistence Toolkit PersistenceSyncManager: Replayed request/response is cached.");
-                                      replayRequestArray(requests);
-                                    });
-                                  });
-                                } else {
-                                  replayRequestArray(requests);
-                                }
-                              }, function (err) {
-                                reject({'error': err, 'requestId': requestId, 'request': requestClone.clone()});
-                              });
-                            } else {
-                              resolve();
-                            }
-                          });
-                        });
-                      }, function (err) {
-                        reject({'error': err, 'requestId': requestId, 'request': requestClone.clone()});
-                      });
-                    }, function(err) {
-                      if (err === false) {
-                        // timeout
-                        var init = {'status': 504, 'statusText': 'Preflight OPTIONS request timed out'};
-                        reject({'error': 'Preflight OPTIONS request timed out', 'requestId': requestId, 'request': requestClone.clone(), 'response': new Response(null, init)});
-                      } else {
-                        reject({'error': err, 'requestId': requestId, 'request': requestClone.clone()});
+                      // fail for HTTP error codes 4xx and 5xx
+                      if (statusCode >= 400) {
+                        reject({'error': response.statusText,
+                        'requestId': requestId,
+                          'request': requestClone.clone(),
+                          'response': response.clone()});
+                        return;
                       }
-                    });
-                  } else {
-                    // skipping, just remove the request and carry on
-                    logger.log("Offline Persistence Toolkit PersistenceSyncManager: Removing skipped request");
-                    self.removeRequest(requestId).then(function () {
-                      requests.shift();
-                      replayRequestArray(requests);
+                      persistenceUtils._cloneResponse(response, {url: request.url}).then(function(responseClone) {
+                        logger.log("Offline Persistence Toolkit PersistenceSyncManager: Dispatching syncRequest event");
+                        _dispatchEvent(self, 'syncRequest', {'requestId': requestId,
+                          'request': requestClone.clone(),
+                          'response': responseClone.clone()},
+                          request.url).then(function (dispatchEventResult) {
+                          if (!_checkStopSync(dispatchEventResult)) {
+                            logger.log("Offline Persistence Toolkit PersistenceSyncManager: Removing replayed request");
+                            self._internalRemoveRequest(requestId, request).then(function () {
+                              requests.shift();
+                              replayRequestArray(requests);
+                            }, function (err) {
+                              reject({'error': err, 'requestId': requestId, 'request': requestClone.clone()});
+                            });
+                          } else {
+                            resolve();
+                          }
+                        });
+                      });
                     }, function (err) {
                       reject({'error': err, 'requestId': requestId, 'request': requestClone.clone()});
                     });
-                  }
-                });
-              }
-            };
-            value = _reorderSyncLog(value);
-            replayRequestArray(value);
-          } else {
-            resolve();
-          }
+                  }, function(err) {
+                    if (err === false) {
+                      // timeout
+                      var init = {'status': 504, 'statusText': 'Preflight OPTIONS request timed out'};
+                      reject({'error': 'Preflight OPTIONS request timed out', 'requestId': requestId, 'request': requestClone.clone(), 'response': new Response(null, init)});
+                    } else {
+                      reject({'error': err, 'requestId': requestId, 'request': requestClone.clone()});
+                    }
+                  });
+                } else {
+                  // skipping, just remove the request and carry on
+                  logger.log("Offline Persistence Toolkit PersistenceSyncManager: Removing skipped request");
+                  self._internalRemoveRequest(requestId, request).then(function () {
+                    requests.shift();
+                    replayRequestArray(requests);
+                  }, function (err) {
+                    reject({'error': err, 'requestId': requestId, 'request': requestClone.clone()});
+                  });
+                }
+              });
+            }
+          };
+          value = _reorderSyncLog(value);
+          replayRequestArray(value);
         });
       });
-      return syncPromise.then(function (value) {
+
+      return syncPromise.finally(function (err) {
         self._syncing = false;
         self._pingedURLs = null;
-        return value;
-      }, function (err) {
-        self._syncing = false;
-        self._pingedURLs = null;
-        return Promise.reject(err);
       });
     };
-    
+
     function _checkURL(persistenceSyncManager, request) {
       // send an OPTIONS request to the server to see if it's reachable
       var self = persistenceSyncManager;
@@ -281,7 +286,7 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
             if(preflightOptionsRequestTimeoutOption != null) {
               requestTimeout = preflightOptionsRequestTimeoutOption;
             }
-            setTimeout(function() 
+            setTimeout(function()
             {
               if (!self._repliedOptionsRequest &&
                 self._preflightOptionsRequestId == preflightOptionsRequestId) {
@@ -306,7 +311,7 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
       }
       return Promise.resolve(true);
     };
-    
+
     function _checkStopSync(syncEventResult) {
       syncEventResult = syncEventResult || {};
       return syncEventResult.action === 'stop';
@@ -368,7 +373,7 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
           requestDataArray.length == 0) {
           return Promise.resolve(syncLogArray);
         } else {
-          requestId = requestDataArray[0].metadata.created.toString();
+          requestId = requestDataArray[0].key;
           requestData = requestDataArray[0].value;
           return persistenceUtils.requestFromJSON(requestData).then(function (request) {
             syncLogArray.push(_createSyncLogEntry(requestId, request));
@@ -380,17 +385,10 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
       return getRequestArray(results);
     };
 
-    function _getRequestFromSyncLog(persistenceSyncManager, requestId) {
-      var self = persistenceSyncManager;
-      return self.getSyncLog().then(function (syncLog) {
-        var i;
-        var request;
-        var syncLogCount = syncLog.length;
-        for (i = 0; i < syncLogCount; i++) {
-          if (syncLog[i].requestId === requestId) {
-            request = syncLog[i].request;
-            return request;
-          }
+    function _getRequestFromSyncLog(requestId, store) {
+      return store.findByKey(requestId).then(function(synLogRecord) {
+        if (synLogRecord) {
+          return persistenceUtils.requestFromJSON(synLogRecord);
         }
       });
     };
@@ -399,16 +397,11 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
       var findExpression = {};
       var fieldsExpression = [];
       var sortExpression = [];
-      sortExpression.push('metadata.created');
+      sortExpression.push('key');
       findExpression.sort = sortExpression;
-      fieldsExpression.push('metadata.created');
+      fieldsExpression.push('key');
       fieldsExpression.push('value');
       findExpression.fields = fieldsExpression;
-      var selectorExpression = {};
-      var existsExpression = {};
-      existsExpression['$exists'] = true;
-      selectorExpression['metadata.created'] = existsExpression;
-      findExpression.selector = selectorExpression;
 
       return findExpression;
     };
@@ -453,7 +446,7 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
           operation = redoUndoDataArray[i].operation;
           undoRedoData = redoUndoDataArray[i].undoRedoData;
 
-          if (operation == 'upsert' || 
+          if (operation == 'upsert' ||
             (operation == 'remove' && isUndo)) {
             // bunch up the upserts so we can do them in bulk using upsertAll
             dataArray = [];
@@ -509,7 +502,7 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
             url == null || eventListener.scope == null);
       };
     };
-    
+
     function _callEventListener(event, eventListeners) {
       if (eventListeners.length > 0) {
         return eventListeners[0].listener(event).then(function (result) {
@@ -525,7 +518,7 @@ define(['require', '../persistenceUtils', '../persistenceStoreManager', './defau
     };
 
     function _getStorage(name) {
-      var options = {index: ['metadata.created']};
+      var options = {index: ['key'], skipMetadata: true};
       return persistenceStoreManager.openStore(name, options);
     };
 
